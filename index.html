@@ -3186,6 +3186,53 @@ boot();
 
 </script>
 
-<script>(function(){var p,b;function s(x){if(b)b.hidden=!x}window.addEventListener("beforeinstallprompt",function(e){e.preventDefault();p=e;s(true)});window.addEventListener("appinstalled",function(){s(false)});window.addEventListener("load",function(){b=document.createElement("button");b.type="button";b.id="pc-install-app";b.hidden=true;b.textContent="Install app";b.style.cssText="position:fixed;right:16px;bottom:16px;z-index:9999;border:0;border-radius:999px;background:#12306B;color:#fff;padding:12px 16px;font:700 14px system-ui;box-shadow:0 7px 20px rgba(0,0,0,.24);cursor:pointer";b.onclick=function(){if(!p)return;p.prompt();p.userChoice.then(function(){p=null;s(false)})};document.body.appendChild(b);if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js").catch(function(){})})})();</script>
+<script>
+/* Prime Choice app install flow: connected to manifest.webmanifest and sw.js */
+(function () {
+  var installEvent = null;
+  var banner, installButtons = [];
+  function triggerInstall() {
+    if (!installEvent) return;
+    installEvent.prompt();
+    installEvent.userChoice.then(function () { installEvent = null; hideInstall(); });
+  }
+  function hideInstall() {
+    if (banner) banner.hidden = true;
+    installButtons.forEach(function (button) { button.disabled = true; });
+  }
+  function addLoginInstall() {
+    var auth = document.querySelector('.auth.card');
+    if (!auth || auth.querySelector('.pc-login-install')) return;
+    var row = document.createElement('div');
+    row.className = 'pc-login-install';
+    row.innerHTML = '<div>Install our app for faster shopping</div><button type="button">Install the app</button>';
+    row.querySelector('button').addEventListener('click', triggerInstall);
+    installButtons.push(row.querySelector('button'));
+    auth.appendChild(row);
+  }
+  function addBanner() {
+    if (document.getElementById('pc-install-banner')) return;
+    banner = document.createElement('aside');
+    banner.id = 'pc-install-banner';
+    banner.setAttribute('aria-label', 'Install Prime Choice app');
+    banner.innerHTML = '<img src="/pc-icon-192.png" alt=""><span>Install our app for faster<br>shopping</span><button type="button" class="pc-install-go">Install</button><button type="button" class="pc-install-close" aria-label="Close">Ã</button>';
+    banner.querySelector('.pc-install-go').addEventListener('click', triggerInstall);
+    banner.querySelector('.pc-install-close').addEventListener('click', function () { banner.hidden = true; });
+    installButtons.push(banner.querySelector('.pc-install-go'));
+    document.body.appendChild(banner);
+  }
+  function renderInstallUi() { addBanner(); addLoginInstall(); }
+  var style = document.createElement('style');
+  style.textContent = '#pc-install-banner{position:fixed;left:8px;right:8px;bottom:8px;z-index:9999;display:flex;align-items:center;gap:8px;min-height:48px;padding:6px 8px;background:#102c66;color:#fff;border-radius:7px;box-shadow:0 3px 12px rgba(0,0,0,.28);font:600 11px/1.1 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}#pc-install-banner[hidden]{display:none}#pc-install-banner img{width:30px;height:30px;border-radius:50%;object-fit:cover;background:#fff}#pc-install-banner span{flex:1}#pc-install-banner button{font:700 12px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer}.pc-install-go{border:0;border-radius:5px;background:#1f9c3e;color:#fff;padding:8px 13px}.pc-install-close{border:0;background:transparent;color:#fff;font-size:21px;line-height:1;padding:3px 1px}.pc-login-install{margin-top:14px;padding-top:12px;border-top:1px solid #e2e7f0;text-align:center;color:#172b52;font:600 13px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}.pc-login-install button{display:block;margin:8px auto 0;min-width:128px;padding:8px 14px;border:2px solid #12306B;border-radius:4px;background:#fff;color:#12306B;font:700 13px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer}.pc-login-install button:disabled,.pc-install-go:disabled{opacity:.55;cursor:default}@media(min-width:720px){#pc-install-banner{left:auto;right:18px;width:285px}}';
+  document.head.appendChild(style);
+  window.addEventListener('beforeinstallprompt', function (event) { event.preventDefault(); installEvent = event; renderInstallUi(); });
+  window.addEventListener('appinstalled', hideInstall);
+  window.addEventListener('load', function () {
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {});
+    renderInstallUi();
+    new MutationObserver(addLoginInstall).observe(document.getElementById('view') || document.body, {childList:true, subtree:true});
+  });
+}());
+</script>
 </body>
 </html>
