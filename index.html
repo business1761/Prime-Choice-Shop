@@ -3191,8 +3191,11 @@ boot();
 (function () {
   var installEvent = null;
   var banner, installButtons = [];
+  function isInstalledApp() {
+    return window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: fullscreen)').matches || window.navigator.standalone === true;
+  }
   function triggerInstall() {
-    if (!installEvent) return;
+    if (isInstalledApp() || !installEvent) { hideInstall(); return; }
     installEvent.prompt();
     installEvent.userChoice.then(function () { installEvent = null; hideInstall(); });
   }
@@ -3201,6 +3204,7 @@ boot();
     installButtons.forEach(function (button) { button.disabled = true; });
   }
   function addLoginInstall() {
+    if (isInstalledApp()) return;
     var auth = document.querySelector('.auth.card');
     if (!auth || auth.querySelector('.pc-login-install')) return;
     var row = document.createElement('div');
@@ -3211,7 +3215,7 @@ boot();
     auth.appendChild(row);
   }
   function addBanner() {
-    if (document.getElementById('pc-install-banner')) return;
+    if (isInstalledApp() || document.getElementById('pc-install-banner')) return;
     banner = document.createElement('aside');
     banner.id = 'pc-install-banner';
     banner.setAttribute('aria-label', 'Install Prime Choice app');
@@ -3221,11 +3225,11 @@ boot();
     installButtons.push(banner.querySelector('.pc-install-go'));
     document.body.appendChild(banner);
   }
-  function renderInstallUi() { addBanner(); addLoginInstall(); }
+  function renderInstallUi() { if (isInstalledApp()) { hideInstall(); return; } addBanner(); addLoginInstall(); }
   var style = document.createElement('style');
   style.textContent = '#pc-install-banner{position:fixed;left:8px;right:8px;bottom:8px;z-index:9999;display:flex;align-items:center;gap:8px;min-height:48px;padding:6px 8px;background:#102c66;color:#fff;border-radius:7px;box-shadow:0 3px 12px rgba(0,0,0,.28);font:600 11px/1.1 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}#pc-install-banner[hidden]{display:none}#pc-install-banner img{width:30px;height:30px;border-radius:50%;object-fit:cover;background:#fff}#pc-install-banner span{flex:1}#pc-install-banner button{font:700 12px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer}.pc-install-go{border:0;border-radius:5px;background:#1f9c3e;color:#fff;padding:8px 13px}.pc-install-close{border:0;background:transparent;color:#fff;font-size:21px;line-height:1;padding:3px 1px}.pc-login-install{margin-top:14px;padding-top:12px;border-top:1px solid #e2e7f0;text-align:center;color:#172b52;font:600 13px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}.pc-login-install button{display:block;margin:8px auto 0;min-width:128px;padding:8px 14px;border:2px solid #12306B;border-radius:4px;background:#fff;color:#12306B;font:700 13px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer}.pc-login-install button:disabled,.pc-install-go:disabled{opacity:.55;cursor:default}@media(min-width:720px){#pc-install-banner{left:auto;right:18px;width:285px}}';
   document.head.appendChild(style);
-  window.addEventListener('beforeinstallprompt', function (event) { event.preventDefault(); installEvent = event; renderInstallUi(); });
+  window.addEventListener('beforeinstallprompt', function (event) { event.preventDefault(); if (isInstalledApp()) { hideInstall(); return; } installEvent = event; renderInstallUi(); });
   window.addEventListener('appinstalled', hideInstall);
   window.addEventListener('load', function () {
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {});
