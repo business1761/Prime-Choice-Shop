@@ -1,0 +1,37 @@
+{
+  "name": "PRIME CHOICE RENDER SUPPLIES",
+  "short_name": "Prime Choice",
+  "description": "Shop wholesale and retail products. Free delivery within 24 hours.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#12306B",
+  "icons": [
+    {
+      "src": "pc-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "pc-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "pc-icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "prefer_related_applications": false,
+  "related_applications": [
+    {
+      "platform": "webapp",
+      "url": "https://primechoice.onrender.com/manifest.webmanifest"
+    }
+  ]
+}
