@@ -9,7 +9,7 @@
 <meta property="og:site_name" content="PRIME CHOICE RENDER SUPPLIES">
 <meta property="og:title" content="PRIME CHOICE RENDER SUPPLIES - Wholesale, Retail and Worldwide Trade">
 <meta property="og:description" content="Quality products from verified suppliers. Order from anywhere. Free delivery within 24 hours.">
-<meta property="og:url" content="https://gbs-shop.onrender.com/">
+<meta property="og:url" content="https://primesupplies.onrender.com/">
 <meta property="og:image" content="https://lh3.googleusercontent.com/d/1NC6ePYWfTacZvaw9BL4bTTbLufcs36xw">
 <meta property="og:image:alt" content="PRIME CHOICE RENDER SUPPLIES">
 <meta name="twitter:card" content="summary_large_image">
@@ -1222,7 +1222,7 @@ App.renderFooter = function () {
     '<div>' + brandHtml() + '<p style="margin-top:12px;max-width:34ch">Serving customers since ' + esc(setting('foundedYear', '2018')) + '. ' + esc(setting('deliveryText', 'Free delivery. No charges.')) + '</p>' + acceptLogos() + '</div>' +
     '<div><h3>Shop</h3><ul><li><a href="#/shop">All products</a></li>' + (App.cfg ? liveCats().slice(0, 5).map(c => '<li><a href="' + esc(hashFor('shop', { cat: c.name })) + '">' + esc(c.name) + '</a></li>').join('') : '') + '</ul></div>' +
     '<div><h3>Your orders</h3><ul><li><a href="#/orders">My orders</a></li><li><a href="#/track">Track an order</a></li><li><a href="#/account">My account</a></li></ul></div>' +
-    '<div><h3>Contact</h3><ul>' + (mail ? '<li><a href="mailto:' + esc(mail) + '">' + esc(mail) + '</a></li>' : '') + (wa ? '<li><a href="' + esc(wa) + '" target="_blank" rel="noopener">Chat on WhatsApp</a></li>' : waName() ? '<li><a href="#" data-act="waname">Chat on WhatsApp</a></li>' : '') + '<li><a href="#/about">About us</a></li><li><a href="#/terms">Terms</a></li><li><a href="#/shipping">Shipping</a></li><li><a href="#/returns">Returns</a></li><li><a href="#/privacy">Privacy</a></li></ul>' +
+    '<div><h3>Contact</h3><ul>' + (mail ? '<li><a href="mailto:' + esc(mail) + '">' + esc(mail) + '</a></li>' : '') + (wa ? '<li><a href="' + esc(wa) + '" target="_blank" rel="noopener">Chat on WhatsApp</a></li>' : waName() ? '<li><a href="#" data-act="waname">Chat on WhatsApp</a></li>' : '') + '<li><a href="#/about">About us</a></li><li><a href="#/app">Get the app</a></li><li><a href="#/terms">Terms</a></li><li><a href="#/shipping">Shipping</a></li><li><a href="#/returns">Returns</a></li><li><a href="#/privacy">Privacy</a></li></ul>' +
     '<p style="margin:14px 0 6px"><label for="cur-select">Show prices in</label></p><select id="cur-select" aria-label="Currency" data-combo="1">' + currencyOptions() + '</select></div>' +
     '</div><div class="legal">© ' + new Date().getFullYear() + ' ' + esc(bizName()) + '. All rights reserved.</div></div></div>';
   const sel = $('#cur-select'); if (sel) sel.addEventListener('change', () => setCurrency(sel.value));
@@ -3230,6 +3230,26 @@ async function boot() {
   }
   if (App.cfg) { loadSession(); initCurrency(); }
 }
+/* ---------- "Get the app" page: a link you can send to anyone (https://your-shop/#/app) ---------- */
+App.routes.app = function () {
+  setTitle('Get the app');
+  const name = esc(bizName()), link = location.href.split('#')[0] + '#/app';
+  let main;
+  if (pcInstalled()) main = '<div class="alert">The app is already on this phone. Open it from your home screen.</div>';
+  else if (PCAPP.ev) main = '<button type="button" class="btn btn-tape btn-lg" data-act="pcinstall">Install the app</button>';
+  else if (pcIsIos()) main = '<div class="alert"><b>iPhone:</b> tap the <b>Share</b> button at the bottom of Safari, then <b>Add to Home Screen</b>, then <b>Add</b>.</div>';
+  else main = '<div class="alert"><b>Android:</b> tap the <b>⋮</b> menu in Chrome, then <b>Install app</b> (or <b>Add to Home screen</b>). On iPhone, use Safari: Share, then Add to Home Screen.</div>';
+  view('<div class="wrap page"><div class="auth card" style="text-align:center"><img src="pc-icon-192.png" alt="" width="96" height="96" style="border-radius:20px;margin:0 auto 10px;display:block"><h1>Get the ' + name + ' app</h1>' +
+    '<p class="lead muted">Shop faster from your home screen. Free delivery. No store download, no space needed.</p>' + main +
+    '<p style="margin-top:16px"><button type="button" class="btn btn-ghost" data-act="pcshare">Share this app with a friend</button></p>' +
+    '<p class="meta" style="margin-top:10px;word-break:break-all">' + esc(link) + '</p></div></div>');
+};
+App.actions.pcinstall = function () { pcPrompt(); };
+App.actions.pcshare = function () {
+  const link = location.href.split('#')[0] + '#/app', text = 'Shop with ' + bizName() + '. Free delivery. Get our app here: ' + link;
+  if (navigator.share) { navigator.share({ title: bizName(), text: text, url: link }).catch(function () { /* cancelled */ }); return; }
+  try { navigator.clipboard.writeText(link).then(function () { toast('Link copied. Paste it to share.', 'ok'); }, function () { toast(link); }); } catch (e) { toast(link); }
+};
 /* ---------- app install (Android and desktop Chrome offer a real Install button; iPhone uses Share > Add to Home Screen) ----------
    Shown while browsing (bottom bar) and on the sign-in screen. Never shown once the app is installed or open as the app.
    Admin > Settings > Shop > Customer app can switch it off or change the words. */
@@ -3264,7 +3284,7 @@ function pcBar(tries) {   // bottom bar on every page while browsing; waits unti
 }
 (function () {
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(function () { /* ignore */ });
-  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); PCAPP.ev = e; pcBar(0); pcAuthInstall(); });
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); PCAPP.ev = e; pcBar(0); pcAuthInstall(); if (App.route && App.route.seg[0] === 'app') onRoute(true); });
   window.addEventListener('appinstalled', function () {
     PCAPP.ev = null; try { localStorage.setItem('pc_installed', '1'); } catch (x) { /* ignore */ }
     ['pcInstall', 'pcAuthIns'].forEach(function (id) { const n = document.getElementById(id); if (n) n.remove(); });
