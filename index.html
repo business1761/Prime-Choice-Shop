@@ -726,9 +726,20 @@ body.map-lock{overflow:hidden}
 .pc .price{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px}.pc .price .was{flex-basis:auto}
 @media (max-width:600px){.fab{width:46px;height:46px;right:10px;bottom:10px;border-width:2px;opacity:.94}.wafab{bottom:64px}.fab svg{width:22px;height:22px}#ftr{padding-bottom:70px}}
 .pc-free{display:block;font-size:12px;font-weight:600;color:#0a7a3d;margin:0 0 6px}
+#pcload{position:fixed;inset:0;z-index:99999;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;padding:24px;transition:opacity .3s}
+#pcload.out{opacity:0;pointer-events:none}
+#pcload img{width:112px;height:112px;border-radius:24px;animation:pcpulse 1.6s ease-in-out infinite}
+#pcload .bar{width:180px;height:5px;border-radius:5px;background:#e3e8ef;overflow:hidden}
+#pcload .bar i{display:block;height:100%;width:40%;border-radius:5px;background:#1f6fe5;animation:pcbar 1.2s ease-in-out infinite}
+#pcload b{font:600 16px/1.3 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#12306B}
+#pcload small{font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#667085;min-height:20px}
+@keyframes pcbar{0%{margin-left:-40%}100%{margin-left:100%}}
+@keyframes pcpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
 </style>
 </head>
 <body>
+<div id="pcload" role="status" aria-live="polite"><img src="pc-icon-192.png" alt=""><b>Prime Choice Render Supplies</b><div class="bar"><i></i></div><small id="pcloadmsg">Loading, please wait...</small></div>
+<script>(function(){var t1=setTimeout(function(){var m=document.getElementById('pcloadmsg');if(m)m.textContent='Almost ready, getting the latest products...'},4000),t2=setTimeout(function(){var m=document.getElementById('pcloadmsg');if(m)m.textContent='First open can take a little longer. Thank you for waiting.'},12000);window.pcLoaded=function(){clearTimeout(t1);clearTimeout(t2);var d=document.getElementById('pcload');if(d){d.classList.add('out');setTimeout(function(){if(d.parentNode)d.parentNode.removeChild(d)},400)}};setTimeout(window.pcLoaded,45000)})();</script>
 <a class="skip" href="#view">Skip to content</a>
 <div id="banner"></div>
 <div id="topbar"></div>
@@ -3211,7 +3222,7 @@ App.actions.rprint = () => { try { window.print(); } catch (e) { toast('Printing
 
 /* ---------- start ---------- */
 const PAGES_WITH_CATALOG = ['', 'home', 'shop', 'p', 'cart'];
-function ready() { renderChrome(); onRoute(false); }
+function ready() { renderChrome(); onRoute(false); if (window.pcLoaded) window.pcLoaded(); }
 async function boot() {
   psReturnFromUrl(); loadCart(); restoreCurrency(); App.token = store('gbs_token'); App.user = store('gbs_user');
   const cached = store('gbs_cat');
@@ -3228,6 +3239,7 @@ async function boot() {
   } catch (e) {
     if (!App.cfg) view('<div class="wrap">' + errorBox(e.message, true) + '</div>');
   }
+  if (window.pcLoaded) window.pcLoaded();
   if (App.cfg) { loadSession(); initCurrency(); }
 }
 /* ---------- "Get the app" page: a link you can send to anyone (https://your-shop/#/app) ---------- */
