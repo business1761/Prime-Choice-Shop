@@ -741,6 +741,7 @@ body.map-lock{overflow:hidden}
 .btn,.btn-tape{background:#FE2C55;border-color:#FE2C55;color:#fff;border-radius:10px}
 .btn:hover,.btn-tape:hover{background:#E0204A;border-color:#E0204A;color:#fff}
 .btn-ghost{background:#fff;color:#111;border-color:#111}
+.btn-wa,.btn-wa:hover{background:#1faa59;color:#fff;border-color:#1faa59}.btn-wa:active{background:#188a48}
 .btn-ghost:hover{background:#111;color:#fff;border-color:#111}
 .banner{background:#111;color:#fff}
 .topbar{background:#000}.topbar svg{color:#fff}.topbar li{border-left-color:rgba(255,255,255,.25)}
@@ -1028,23 +1029,62 @@ function timed(url, ms) {
   const c = new AbortController(); const t = setTimeout(() => c.abort(), ms || 3500);
   return fetch(url, { signal: c.signal }).then(r => r.json()).finally(() => clearTimeout(t));
 }
-// Where is the visitor? Four guesses, best first. None of them asks the customer for anything.
-//   1+2) two free internet-address services, asked at the same time (the first good answer wins; they also give the city)
-//   3)   a country-only service     4) the phone's time zone (works with no internet at all)
-// The phone's LANGUAGE is not used: "English (US)" does not mean the visitor is in the USA.
+// Where is the visitor? Several clues vote (see below). None of them asks the customer for anything.
 async function detectCountry() {
+  // Several clues vote; the country with the most points wins, so one wrong clue (a wrong phone clock, a mobile network address
+  // that points to a neighbouring country) cannot decide alone:
+  //   time zone 3 points | each internet-address service 2 points (two that agree = 4) | country-only service 2 points
+  //   | region of the phone language, e.g. "en-KE" 1 point | tie -> the time zone
   const cached = store('gbs_ip');
   if (cached && cached.code && Date.now() - cached.t < 6 * 3600000) { App.ipInfo = cached.info || null; return cached.code; }
+  const tz = tzCountry();
   const num = v => { const n = Number(v); return v === '' || v == null || !isFinite(n) ? null : n; };
-  const one = (url, pick) => () => timed(url).then(j => { const r = pick(j); if (r && /^[A-Za-z]{2}$/.test(r.code || '')) { r.code = String(r.code).toUpperCase(); return r; } });
-  const race = fns => new Promise(res => { let left = fns.length; fns.forEach(f => { Promise.resolve().then(f).then(r => { if (r) res(r); }).catch(() => { /* this one failed, the others may answer */ }).then(() => { if (--left === 0) res(null); }); }); });
-  let found = await race([
-    one('https://ipwho.is/', j => j && j.success !== false ? { code: j.country_code, city: String(j.city || ''), lat: num(j.latitude), lng: num(j.longitude) } : null),
-    one('https://get.geojs.io/v1/ip/geo.json', j => j ? { code: j.country_code, city: String(j.city || ''), lat: num(j.latitude), lng: num(j.longitude) } : null)
-  ]);
-  if (!found) found = await race([one('https://api.country.is/', j => j ? { code: j.country, city: '', lat: null, lng: null } : null)]);
-  if (found) { App.ipInfo = found; store('gbs_ip', { t: Date.now(), code: found.code, info: found }); return found.code; }
-  return tzCountry();
+  const one = (url, pick) => timed(url).then(j => { const r = pick(j); if (r && /^[A-Za-z]{2}$/.test(r.code || '')) { r.code = String(r.code).toUpperCase(); return r; } return null; }).catch(() => null);
+  const a = one('https://ipwho.is/', j => j && j.success !== false ? { code: j.country_code, city: String(j.city || ''), lat: num(j.latitude), lng: num(j.longitude) } : null);
+  const b = one('https://get.geojs.io/v1/ip/geo.json', j => j ? { code: j.country_code, city: String(j.city || ''), lat: num(j.latitude), lng: num(j.longitude) } : null);
+  // wait for the first answer, then give the other one a short moment so two answers can confirm each other
+  let ra = null, rb = null;
+  a.then(r => { ra = r; }); b.then(r => { rb = r; });
+  await Promise.race([a.then(r => r || b), b.then(r => r || a)]);
+  await Promise.race([Promise.all([a, b]), new Promise(res => setTimeout(res, 1500))]);
+  const ips = [ra, rb].filter(Boolean);
+  let alone = null;
+  if (!ips.length) { alone = await one('https://api.country.is/', j => j ? { code: j.country, city: '', lat: null, lng: null } : null); if (alone) ips.push(alone); }
+  const score = {}, add = (c, n) => { if (c) score[c] = (score[c] || 0) + n; };
+  add(tz, 3);
+  ips.forEach(r => add(r.code, 2));
+  try { const l = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language]).map(x => String(x || '').split('-')[1]).filter(x => /^[A-Za-z]{2}$/.test(x || '') && !/^(US|GB)$/i.test(x))[0]; if (l) add(l.toUpperCase(), 1); } catch (e) { /* no language clue */ }   // US/GB are skipped: used worldwide, they say nothing about where the phone is
+  let best = '', top = 0;
+  Object.keys(score).forEach(c => { if (score[c] > top || (score[c] === top && c === tz)) { best = c; top = score[c]; } });
+  if (!best) return '';
+  const info = ips.filter(r => r.code === best)[0] || null;   // the city and map point only when the winning country came from an internet-address service
+  App.ipInfo = info;
+  store('gbs_ip', { t: Date.now(), code: best, info: info });
+  return best;
+}
+// Sixth clue, only when the customer already allowed location for this shop before: no pop-up, it just corrects the guess.
+async function gpsUpgrade() {
+  try {
+    if (!navigator.geolocation || !navigator.permissions) return;
+    const st = await navigator.permissions.query({ name: 'geolocation' });
+    if (st.state !== 'granted') return;
+    const loc = store('gbs_loc'), cur = store('gbs_cur');
+    if ((loc && loc.manual) || (cur && cur.auto === false)) return;
+    navigator.geolocation.getCurrentPosition(async pos => {
+      try {
+        const r = await nominatim('reverse', { lat: pos.coords.latitude, lon: pos.coords.longitude, zoom: 3 });
+        const code = r && r.address && r.address.country_code ? String(r.address.country_code).toUpperCase() : '';
+        if (!/^[A-Z]{2}$/.test(code) || code === App.fx.country) return;
+        App.ipInfo = { code: code, city: '', lat: pos.coords.latitude, lng: pos.coords.longitude };
+        store('gbs_ip', { t: Date.now(), code: code, info: App.ipInfo });
+        App.fx.country = code;
+        applyCurrency(CUR_MAP[code] || 'USD');
+        store('gbs_cur', { code: App.fx.code, auto: App.fx.auto, country: code });
+        if (App.refreshPrices) App.refreshPrices();
+        if (App.onDetected) App.onDetected();
+      } catch (e) { /* keep the current guess */ }
+    }, () => { /* not available: keep the guess */ }, { maximumAge: 3600000, timeout: 8000 });
+  } catch (e) { /* keep the guess */ }
 }
 async function loadRates() {
   const c = store('gbs_fx');
@@ -1072,6 +1112,7 @@ async function initCurrency() {
   if (App.fx.code + App.fx.rate !== before && App.refreshPrices) App.refreshPrices();
   else if (App.renderFooter) App.renderFooter();
   if (App.onDetected) App.onDetected();
+  gpsUpgrade();
 }
 function setCurrency(code) { App.fx.auto = false; applyCurrency(code); store('gbs_cur', { code: App.fx.code, auto: false, country: App.fx.country }); if (App.refreshPrices) App.refreshPrices(); }
 
@@ -1285,7 +1326,7 @@ function toolsHtml() {
   h += '<a class="tool" href="#/cart" aria-label="Cart, ' + plural(n, 'item', 'items') + '">' + ICON.cart + '<span class="lbl">Cart</span>' + (n ? '<span class="badge cart">' + n + '</span>' : '') + '</a>';
   return h;
 }
-App.updateTools = function () { const t = $('#tools'); if (t) t.innerHTML = toolsHtml(); if (typeof pcTabs === 'function') pcTabs(); };
+App.updateTools = function () { const t = $('#tools'); if (t) t.innerHTML = toolsHtml(); if (typeof pcTabs === 'function') pcTabs(); if (typeof pcPushInit === 'function') { pcPushInit(); pcPushSync(); } };
 function renderTopbar() {
   const mail = setting('supportEmail', '');
   $('#topbar').innerHTML = '<div class="topbar"><div class="wrap topbar-in"><ul class="tb-trust"><li>' + ico('globe') + 'Global Shipping</li><li>' + ico('shield') + 'Quality Products</li><li>' + ico('lock') + 'Secure Shopping</li></ul>' +
@@ -1441,16 +1482,19 @@ function ratingLine(p) { return (reviewsOn() && p.reviews > 0) ? '<div class="ra
 /* ---------- tunes: small smooth sounds made by the browser itself (no files, no copyright) ---------- */
 
 let pcCur = null, pcLast = null;
-function pcPlayAny(v) {   // a built-in tune name, or the link of a sound the owner uploaded
+function pcGain(p) { if (p === undefined || p === null || p === '' || !isFinite(Number(p))) return 0.16; return Math.max(0, Math.min(100, Number(p))) / 100 * 0.4; }   // how loud a built-in tune is: 0 to 100 %
+function pcVolOf(p, d) { return (p === undefined || p === null || p === '' || !isFinite(Number(p))) ? d : Math.max(0, Math.min(100, Number(p))); }
+function pcPlayAny(v, pct) {   // a built-in tune name, or the link of a sound the owner uploaded; pct = how loud (0 to 100)
   try {
     if (pcCur) { pcCur.pause(); pcCur = null; }
+    if (pcVolOf(pct, 70) === 0) return;
     if (/^https:\/\//.test(String(v || ''))) {
-      const a = new Audio(v); pcCur = a; a.volume = 0.7;
+      const a = new Audio(v); pcCur = a; a.volume = pcVolOf(pct, 70) / 100;
       const pr = a.play(); if (pr && pr.catch) pr.catch(function () {});
       pcLast = a;
       const secs = Number(typeof setting === 'function' ? setting('productSoundSecs', '37') : 37);
       if (secs > 0) setTimeout(function () { try { a.pause(); } catch (e) {} }, secs * 1000);   // the owner chooses how long (0 = the whole sound)
-    } else pcPlayTune(v);
+    } else pcPlayTune(v, pcGain(pct));
   } catch (e) { /* a missing sound must never stop the shop */ }
 }
 
@@ -1473,8 +1517,15 @@ function pcNote(ac, t, f, dur, type, g) {
 }
 function pcPlayTune(id, vol) {
   try {
-    const ac = pcAudio(); if (!ac || ac.state !== 'running') return;   // phones allow sound only after the first touch
-    const t = ac.currentTime + 0.02, v = vol || 0.16;
+    const ac = pcAudio(); if (!ac) return;   // phones allow sound only after the first touch
+    if (ac.state === 'running') return pcPlayNow(ac, id, vol);
+    ac.resume().then(function () { if (ac.state === 'running') pcPlayNow(ac, id, vol); }).catch(function () {});   // wake it up if the phone put it to sleep
+  } catch (e) { /* a missing sound must never stop the shop */ }
+}
+function pcPlayNow(ac, id, vol) {
+  try {
+    const t = ac.currentTime + 0.02, v = (vol === undefined || vol === null) ? 0.16 : vol;
+    if (!(v > 0)) return;
     const S = {
       chime: [[1047, 0, 0.9], [1319, 0.12, 0.9], [1568, 0.24, 1.3]],
       bell: [[880, 0, 1.7], [1760, 0, 1.1, 'sine', 0.35]],
@@ -1510,7 +1561,8 @@ function pcMusicTry() {
   pcMuteBtn(); if (pcMuted()) return;
   const secs = Number(setting('shopMusicSecs', '60')) || 0;
   try {
-    const a = new Audio(u); a.volume = 0.35; pcMusic = a;
+    const a = new Audio(u); a.volume = pcVolOf(setting('shopMusicVol', '35'), 35) / 100; pcMusic = a;
+    if (a.volume === 0) { pcMusic = null; pcMusicDone = true; return; }
     a.addEventListener('ended', function () { pcMusicDone = true; });
     const pr = a.play(); if (pr && pr.catch) pr.catch(function () { pcMusic = null; });   // not allowed yet: try again at the next touch
     if (secs > 0) setTimeout(function () { pcMusicDone = true; try { a.pause(); } catch (e) {} }, secs * 1000);
@@ -1519,7 +1571,7 @@ function pcMusicTry() {
 ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown'].forEach(function (ev) { document.addEventListener(ev, function () { setTimeout(pcMusicTry, 50); }, { passive: true }); });
 function pcDuck() { if (pcMusic && !pcMusic.paused && !pcMusicDone) { pcMusic.pause(); pcDucked = true; } }
 function pcUnduck() { if (pcDucked) { pcDucked = false; if (pcMusic && !pcMusicDone && !pcMuted()) { const pr = pcMusic.play(); if (pr && pr.catch) pr.catch(function () {}); } } }
-function pcOpenTune(p) { if (!p.sound || /^false$/i.test(String(setting('productSoundOn', 'TRUE')))) return; pcMuteBtn(); if (pcMuted()) return; const n = Date.now(); if (App.tunedId === p.id && n - (App.tunedAt || 0) < 4000) return; App.tunedId = p.id; App.tunedAt = n; setTimeout(function () { pcDuck(); pcLast = null; pcPlayAny(p.sound); const a = pcLast; if (a) { a.addEventListener('ended', pcUnduck); const sc = Number(setting('productSoundSecs', '37')) || 0; if (sc > 0) setTimeout(pcUnduck, sc * 1000 + 300); } else setTimeout(pcUnduck, 2600); }, 150); }
+function pcOpenTune(p) { if (!p.sound || /^false$/i.test(String(setting('productSoundOn', 'TRUE')))) return; pcMuteBtn(); if (pcMuted()) return; const n = Date.now(); if (App.tunedId === p.id && n - (App.tunedAt || 0) < 4000) return; App.tunedId = p.id; App.tunedAt = n; setTimeout(function () { pcDuck(); pcLast = null; pcPlayAny(p.sound, pcVolOf(setting('productSoundVol', '70'), 70)); const a = pcLast; if (a) { a.addEventListener('ended', pcUnduck); const sc = Number(setting('productSoundSecs', '37')) || 0; if (sc > 0) setTimeout(pcUnduck, sc * 1000 + 300); } else setTimeout(pcUnduck, 2600); }, 150); }
 function cardHtml(p) {
   const href = '#/p/' + encodeURIComponent(p.id), letter = (p.name || '?').trim().charAt(0).toUpperCase();
   return '<article class="pc"><a class="pc-img" href="' + esc(href) + '" tabindex="-1" aria-hidden="true">' + imgTag(p.images[0], 480, p.name, letter) + stockTag(p) + (flashActive() && p.was > 0 ? '<span class="tag tag-flash">' + esc(flashTitle()) + '</span>' : '') + '</a>' +
@@ -1711,7 +1763,7 @@ App.routes.p = function (rest) {
       (p.stock > 0 ? '<div class="buy"><div class="qty"><button data-act="pq" data-d="-1" aria-label="One less">−</button><input id="pq" type="number" inputmode="numeric" min="1" max="' + max + '" value="1" aria-label="Quantity"><button data-act="pq" data-d="1" aria-label="One more">+</button></div>' +
         '<button class="btn btn-tape" style="flex:1;min-width:180px" data-act="addq" data-id="' + esc(p.id) + '">Add to cart</button></div>' +
         (inCart ? '<p class="meta" style="margin-top:-8px">You already have ' + inCart + ' in your cart' + (left === 0 ? ' (that is all we have)' : '') + '.</p>' : '') : '') +
-      (shopFlag('waAskItem') && waAskLink(p) ? '<p style="margin:10px 0"><a class="btn btn-ghost" href="' + esc(waAskLink(p)) + '" target="_blank" rel="noopener">Ask about this item on WhatsApp</a></p>' : '') +
+      (shopFlag('waAskItem') && waAskLink(p) ? '<p style="margin:10px 0"><a class="btn btn-wa" href="' + esc(waAskLink(p)) + '" target="_blank" rel="noopener">Ask about this item on WhatsApp</a></p>' : '') +
       '<div class="deliv"><b>Free delivery within ' + deliveryHours() + ' hours</b><span>Pay now and it reaches you by <span data-eta>' + esc(etaText()) + '</span>.</span></div>' + acceptLogos(true) +
       (p.location ? '<p class="meta">Ships from ' + esc(p.location) + '.</p>' : '') + '</div></div>' +
     (reviewsOn() ? '<section class="rvbox" id="rvbox" aria-live="polite"></section>' : '') +
@@ -1982,9 +2034,10 @@ function handleErr(e, next) {
 async function refreshUnread() {
   if (!App.token) return;
   const t0 = App.token;
-  try { const r = await api('me'); if (App.token !== t0) return; const prev = App.unread || 0; App.user = r.customer; App.unread = r.unread || 0; store('gbs_user', r.customer); App.updateTools(); if (App.unSeen && App.unread > prev && pcSoundOn('custSoundOn')) pcPlayTune(String(setting('custSound', '')) || 'chime'); App.unSeen = true; } catch (e) { /* ignore */ }
+  try { const r = await api('me'); if (App.token !== t0) return; const prev = App.unread || 0; App.user = r.customer; App.unread = r.unread || 0; store('gbs_user', r.customer); App.updateTools(); if (App.unSeen && App.unread > prev) { if (pcSoundOn('custSoundOn') && pcVolOf(setting('custSoundVol', '50'), 50) > 0) pcPlayTune(String(setting('custSound', '')) || 'chime', pcGain(pcVolOf(setting('custSoundVol', '50'), 50))); try { if (navigator.vibrate && !pcMuted()) navigator.vibrate(120); } catch (e) {} toast('You have a new message from the shop. Tap the Messages button to read it.'); } App.unSeen = true; } catch (e) { /* ignore */ }
 }
-setInterval(() => { if (App.token && !document.hidden) refreshUnread(); }, 90000);
+setInterval(() => { if (App.token && !document.hidden) refreshUnread(); }, 25000);
+document.addEventListener('visibilitychange', () => { if (App.token && document.visibilityState === 'visible') refreshUnread(); });
 
 /* ---------- floating message button + "message us" window ---------- */
 function renderFab() {
@@ -2087,7 +2140,7 @@ function renderAuth(focus) {
     btn = m === 'signup' ? 'Create my account' : 'Email me a code';
     alt = m === 'signin' ? '<button type="button" class="linkbtn" data-act="amode" data-m="signup">New here? Create an account</button>' : '<button type="button" class="linkbtn" data-act="amode" data-m="signin">Already have an account? Sign in</button>';
   } else {
-    fields += '<div class="sent">' + (AUTH.exists ? 'You already have an account with this email. ' : '') + 'We sent a 6-digit code to <b>' + esc(AUTH.email) + '</b>. It works for 10 minutes. No email? Look in your <b>Spam</b> or <b>Junk</b> folder. If it is there, tap <b>Not spam</b> so our next emails arrive normally.</div>';
+    fields += '<div class="sent">' + (AUTH.exists ? 'You already have an account with this email. ' : '') + 'We sent a 6-digit code to <b>' + esc(AUTH.email) + '</b>. It works for 10 minutes. It can take a minute to arrive.</div>';
     fields += fld('a-code', 'Your 6-digit code', { ac: 'one-time-code', req: 1, im: 'numeric', max: 7, extra: ' pattern="[0-9]*" autocapitalize="off"' }).replace('class="inp"', 'class="inp codein"');
     if (AUTH.needTerms) fields += termsRowHtml();
     btn = 'Sign in';
@@ -2203,12 +2256,13 @@ const MAP = { m: null, marker: null, lat: null, lng: null, seq: 0, hits: [] };
 const LEAF_JS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', LEAF_CSS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
 
 /* map layers: Satellite first (default), then Map; a Labels tick; full screen. The choice is remembered on this phone. */
-const SAT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', LBL_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
+const SAT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', LBL_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', NAMES_URL = 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png';
 function addMapLayers(m, el) {
   const L = window.L; let kind = 'sat', labels = true;
   try { kind = localStorage.getItem('gbs_maptype') === 'map' ? 'map' : 'sat'; labels = localStorage.getItem('gbs_maplabels') !== '0'; } catch (e) { /* private mode */ }
   const sat = L.tileLayer(SAT_URL, { maxZoom: 21, maxNativeZoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }),
-    lbl = L.tileLayer(LBL_URL, { maxZoom: 21, maxNativeZoom: 19, attribution: '' }),
+    // names: countries, seas and towns when zoomed out; streets, estates, shops and landmarks (from OpenStreetMap) once zoomed in, all the way to the maximum zoom
+    lbl = L.layerGroup([L.tileLayer(LBL_URL, { maxZoom: 11, maxNativeZoom: 11, attribution: '' }), L.tileLayer(NAMES_URL, { minZoom: 12, maxZoom: 21, maxNativeZoom: 20, subdomains: 'abcd', attribution: '© OpenStreetMap contributors © CARTO' })]),
     osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
   const ctl = L.control({ position: 'topright' });
   ctl.onAdd = function () {
@@ -2339,11 +2393,12 @@ async function openMap() {
   try { await Promise.all([loadStyle(LEAF_CSS), loadScript(LEAF_JS)]); }
   catch (e) { box.innerHTML = '<p class="meta" id="map-note">The map could not load. Please type your address above. You can still place your order.</p>'; return; }
   if (!$('#map')) return;   // the customer already left this page
-  const L = window.L, has = goodPin(MAP.lat, MAP.lng), here = App.loc && App.loc.lat != null && App.loc.lng != null;
+  const L = window.L, has = goodPin(MAP.lat, MAP.lng), here = false;   // the map starts on the world, then moves to the customer's country
   if (MAP.m) { try { MAP.m.remove(); } catch (e) { /* old page */ } }
   const m = MAP.m = L.map('map', { scrollWheelZoom: false }).setView(has ? [MAP.lat, MAP.lng] : here ? [App.loc.lat, App.loc.lng] : [0, 20], has ? 16 : here ? 12 : 2);
   addMapLayers(m, $('#map'));
   m.on('click', e => setPin(e.latlng.lat, e.latlng.lng, true));
+  ['co-country', 'co-city', 'co-address'].forEach(id => { const e = $('#' + id); if (e && !e.dataset.mf) { e.dataset.mf = '1'; e.addEventListener(id === 'co-country' ? 'change' : 'input', id === 'co-country' ? () => { if (MAP.lat == null) mapShowCountry(val('co-country')); } : mapFollowTyped); } });
   MAP.marker = null;
   if (has) {   // a pin saved from last time: show it and tell the customer which address it is
     placeMarker(MAP.lat, MAP.lng); mapNote('This is the pin you saved. Drag it if it is not right.'); setAddrCard('Finding the address…', '');
@@ -2351,10 +2406,7 @@ async function openMap() {
     nominatim('reverse', { lat: MAP.lat, lon: MAP.lng, zoom: 18 }).then(r => { if (my === MAP.seq && r && !r.error) setAddrCard(shortAddr(r), 'Your pin'); else if (my === MAP.seq) setAddrCard('Your pin is on the map', 'Address not found for this spot'); }).catch(() => { if (my === MAP.seq) setAddrCard('Your pin is on the map', ''); });
   } else {
     mapNote('Press "Use my current location", search above, or tap the map to drop the pin.');
-    if (!here) {
-      const q = [val('co-city'), val('co-country')].filter(Boolean).join(', ');
-      if (q) nominatim('search', { q: q, limit: 1 }).then(r => { if (r && r[0] && MAP.lat == null && MAP.m === m) m.setView([Number(r[0].lat), Number(r[0].lon)], 12); }).catch(() => { /* optional */ });
-    }
+    if (val('co-country')) mapShowCountry(val('co-country'));
     // if the customer already allowed location for this site, show where they are straight away
     try { if (navigator.permissions && navigator.permissions.query) navigator.permissions.query({ name: 'geolocation' }).then(st => { if (st.state === 'granted' && MAP.m === m && MAP.lat == null) locateMe(true); }).catch(() => { /* ignore */ }); } catch (e) { /* ignore */ }
   }
@@ -2379,14 +2431,57 @@ function setPin(lat, lng, reverse, fromDrag) {
   nominatim('reverse', { lat: MAP.lat, lon: MAP.lng, zoom: 18 }).then(r => { if (my !== MAP.seq) return; if (r && !r.error) { fillFromPlace(r); } else setAddrCard('Your pin is on the map', 'We could not find an address for this spot. Please type it below.'); })
     .catch(() => { if (my === MAP.seq) setAddrCard('Your pin is on the map', 'We could not look up the address. Please type it below.'); });
 }
-MAP.fill = { address: '', city: '' };
+MAP.fill = { address: '', city: '' }; MAP.fseq = 0; MAP.cbox = {};
+// the map opens on the whole of the customer's country, so she can search or pin from there
+const COUNTRY_BOX = { 'United States': [24.4, 49.5, -125, -66.5], 'France': [41.2, 51.2, -5.5, 9.8], 'Canada': [41.6, 70, -141, -52.6], 'Russia': [41, 70, 27, 180], 'Netherlands': [50.7, 53.6, 3.3, 7.3], 'Norway': [57.9, 71.2, 4.5, 31.2], 'Portugal': [36.9, 42.2, -9.6, -6.1], 'Spain': [35.9, 43.9, -9.4, 4.4] };
+async function mapShowCountry(name) {
+  if (!MAP.m || MAP.lat != null || !name) return;
+  let b = COUNTRY_BOX[name] || MAP.cbox[name];
+  if (!b) {
+    try { const r = await nominatim('search', { q: name, limit: 1 }); if (r && r[0] && r[0].boundingbox) { const x = r[0].boundingbox.map(Number); b = [x[0], x[1], x[2], x[3]]; MAP.cbox[name] = b; } } catch (e) { return; }
+  }
+  if (b && MAP.m && MAP.lat == null) { try { MAP.m.fitBounds([[b[0], b[2]], [b[1], b[3]]], { padding: [8, 8] }); } catch (e) { /* ignore */ } mapNote('Showing ' + name + '. Search above, or tap the map to drop your pin.'); }
+}
+// a short delivery address for the rider: place name, house number and street, area (not the long full name)
+function placeAddress(r) {
+  const a = r.address || {}, street = [a.house_number, a.road].filter(Boolean).join(' ');
+  const area = a.neighbourhood || a.suburb || a.quarter || a.hamlet || a.city_district || '';
+  const poi = (r.name && r.name !== a.road && r.name !== area) ? r.name : (a.amenity || a.shop || a.building || a.tourism || a.office || '');
+  const t = [poi, street, area].filter(Boolean).join(', ');
+  return (t || String(r.display_name || '').split(',').slice(0, 3).join(',').trim()).slice(0, 200);
+}
+// the other way round: when the customer types the country, town or address, the map moves to that place so its names are on screen
+let followTimer = null;
+function mapFollowTyped() {
+  clearTimeout(followTimer);
+  followTimer = setTimeout(async () => {
+    if (!MAP.m || MAP.lat != null) return;   // once there is a pin, the pin decides
+    const country = val('co-country'), city = val('co-city'), addr = val('co-address'), my = ++MAP.fseq;
+    // try the full text first; if the country does not fit the town (for example Eldoret with South Sudan), look without the country and fix the country
+    const tries = [[addr, city, country, 1], [addr, city, '', 0], [city, country, 1], [city, '', 0]].map(x => ({ w: x.pop(), q: x.filter(Boolean).join(', ') })).filter((t, i, arr) => t.q.length >= 3 && arr.findIndex(u => u.q === t.q) === i);
+    for (const t of tries) {
+      try {
+        const r = await nominatim('search', { q: t.q, limit: 1 }); if (my !== MAP.fseq || !MAP.m || MAP.lat != null) return;
+        if (r && r[0]) {
+          const z = (addr && t.q.indexOf(addr) === 0) ? 16 : (city && t.q.indexOf(city) === 0) ? 12 : 5;
+          MAP.m.setView([Number(r[0].lat), Number(r[0].lon)], z);
+          const c = !t.w && r[0].address ? countryByCode(r[0].address.country_code) : null, sel = $('#co-country');
+          if (c && sel && sel.value !== c.name) { sel.value = c.name; mapNote('The map shows the place you typed. We set the country to ' + c.name + '. Tap the map to drop your exact pin.'); }
+          else mapNote('The map shows the place you typed. Tap the map to drop your exact pin.');
+          return;
+        }
+      } catch (e) { return; }
+    }
+    if (country && my === MAP.fseq) mapShowCountry(country);   // nothing more exact was found: show the whole country
+  }, 1000);
+}
 // fills the address boxes from the map, but never over something the customer typed themselves
 function fillFromPlace(r) {
   const a = r.address || {}, c = countryByCode(a.country_code), sel = $('#co-country');
   if (c && sel) sel.value = c.name;
   const city = a.city || a.town || a.village || a.municipality || a.suburb || a.county || a.state || '';
-  if (city && (!val('co-city') || val('co-city') === MAP.fill.city)) { $('#co-city').value = city; MAP.fill.city = city; }
-  const addr = String(r.display_name || '').slice(0, 200);
+  if (city) { $('#co-city').value = city; MAP.fill.city = city; }   // the town always follows the pin, so the country, town and pin agree
+  const addr = placeAddress(r);
   if (addr && (!val('co-address') || val('co-address') === MAP.fill.address)) { $('#co-address').value = addr; MAP.fill.address = addr; }
   setAddrCard(shortAddr(r) || 'Your pin is on the map', 'Your pin. We filled in the address below. You can change it.');
   saveDraft();
@@ -2517,7 +2612,7 @@ function showOrder(o) {
   const note = ordNote(o);
   view('<div class="wrap page ord"><a class="back" href="#/orders">← My orders</a>' +
     '<div class="ord-head"><div><h1>Order ' + esc(o.id) + '</h1><p class="meta">Placed ' + esc(fmtDate(o.createdAt)) + ' · ' + esc(o.paymentMethod) + '</p></div><div class="pills">' + payPill(o) + deliveryPill(o) + '</div></div>' +
-    '<div class="alert ' + note.kind + '" role="status">' + esc(note.text) + '</div><div id="ord-alert"></div>' +
+    '<div class="alert ' + note.kind + '" role="status">' + esc(note.text) + '</div>' + '<div id="ord-alert"></div>' +
     '<div class="ord-grid"><div class="ord-main">' + payPanel(o) + progressCard(o) + '</div><aside class="ord-side">' + itemsCard(o) + shipCard(o) + actionsCard(o) + '</aside></div></div>');
   mountPay(o); startOrderRefresh(o);
   if (o.ship && goodPin(o.ship.lat, o.ship.lng)) showMiniMap('ord-map', Number(o.ship.lat), Number(o.ship.lng));
@@ -3012,8 +3107,8 @@ App.routes.notifications = async function () {
 
 function renderNotes() {
   const l = NT.list, unread = l.filter(n => !n.read).length;
-  if (!l.length) { view('<div class="wrap page"><h1>Notifications</h1><div class="empty"><h2>Nothing new</h2><p>We tell you here when your payment is confirmed, your order is on its way, or we reply to you.</p><a class="btn" href="#/shop">Back to shop</a></div></div>'); return; }
-  view('<div class="wrap page"><div class="ord-head"><h1>Notifications</h1>' + (unread ? '<button type="button" class="btn btn-ghost btn-sm" data-act="nall">Mark all as read</button>' : '') + '</div>' +
+  if (!l.length) { view('<div class="wrap page">' + pcPushBanner() + '<h1>Notifications</h1><div class="empty"><h2>Nothing new</h2><p>We tell you here when your payment is confirmed, your order is on its way, or we reply to you.</p><a class="btn" href="#/shop">Back to shop</a></div></div>'); return; }
+  view('<div class="wrap page">' + pcPushBanner() + '<div class="ord-head"><h1>Notifications</h1>' + (unread ? '<button type="button" class="btn btn-ghost btn-sm" data-act="nall">Mark all as read</button>' : '') + '</div>' +
     '<ul class="nlist">' + l.map(n => '<li class="nf' + (n.read ? '' : ' unread') + '"><button type="button" class="nf-b" data-act="nopen" data-id="' + esc(n.id) + '"><span class="nf-dot" aria-hidden="true"></span><span class="nf-t"><b>' + esc(n.title) + '</b><span>' + esc(n.message) + '</span><time>' + esc(fmtDate(n.createdAt)) + (n.orderId ? ' · Order ' + esc(n.orderId) : '') + '</time></span></button></li>').join('') + '</ul></div>');
 }
 App.actions.nopen = async el => {
@@ -3060,7 +3155,7 @@ function avatarHtml(u, big) {
 function renderAccount() {
   const u = App.user;
   const missing = !u.phone || !u.address || !u.city, tile = (href, icon, label, badge) => '<a class="acc-tile" href="' + href + '">' + icon + '<span>' + label + '</span>' + (badge ? '<em>' + esc(badge) + '</em>' : '') + '</a>';
-  view('<div class="wrap page acc"><h1 class="sr">My account</h1>' +
+  view('<div class="wrap page acc"><h1 class="sr">My account</h1>' + pcPushBanner() +
     '<section class="card acc-hero"><div class="acc-who">' + avatarHtml(u, true) + '<div class="acc-id"><b id="acc-name">' + esc(u.name || 'Your name') + '</b><span class="meta">' + esc(u.email) + '</span>' +
     (u.createdAt ? '<span class="meta">Customer since ' + esc(fmtDate(u.createdAt, { month: 'long', year: 'numeric' })) + '</span>' : '') +
     '<div><button type="button" class="btn btn-ghost btn-sm" data-act="apick">Change photo</button><input type="file" id="acc-photo" accept="image/*" hidden></div></div></div><div id="ph-alert"></div></section>' +
@@ -3577,8 +3672,55 @@ async function pcLive() {
   } catch (e) { /* try again later */ }
   finally { pcLiveBusy = false; pcLiveAt = Date.now(); }
 }
-document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && Date.now() - pcLiveAt > 45000) pcLive(); });
-setInterval(function () { if (document.visibilityState === 'visible' && Date.now() - pcLiveAt > 150000) pcLive(); }, 30000);
+document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') pcWatch(true); });
+/* very small check every 6 seconds (every minute if the customer is idle): if the owner saved anything, fetch it at once */
+let pcVer = null, pcWatchBusy = false, pcTouchAt = Date.now(), pcWatchAt = 0;
+['pointerdown', 'touchend', 'keydown', 'scroll'].forEach(function (ev) { document.addEventListener(ev, function () { pcTouchAt = Date.now(); }, { passive: true }); });
+async function pcWatch(now) {
+  if (pcWatchBusy || !App.cfg || document.visibilityState !== 'visible') return;
+  const gap = Date.now() - pcTouchAt > 300000 ? 60000 : 6000;
+  if (!now && Date.now() - pcWatchAt < gap - 500) return;
+  pcWatchBusy = true; pcWatchAt = Date.now();
+  try {
+    const r = await api('pubVersion');
+    if (r && r.v) { if (pcVer !== null && r.v !== pcVer) { pcVer = r.v; await pcLive(); } else pcVer = r.v; }
+  } catch (e) { /* offline or slow: try again next time */ }
+  finally { pcWatchBusy = false; }
+}
+setInterval(function () { pcWatch(false); }, 2000);
+setInterval(function () { if (document.visibilityState === 'visible' && Date.now() - pcLiveAt > 600000) pcLive(); }, 60000);
+/* ---------- phone notifications (OneSignal): a pop-up in the phone's notification panel, even when the shop is closed ---------- */
+function pcPushOn() { return /^true$/i.test(String(setting('pushOn', 'FALSE'))) && /^[0-9a-fA-F-]{36}$/.test(String(setting('pushAppId', ''))); }
+function pcPushInit() {
+  if (App.pushInit || !App.cfg || !pcPushOn()) return;
+  App.pushInit = true; window.OneSignalDeferred = window.OneSignalDeferred || [];
+  try { const sc = document.createElement('script'); sc.src = 'https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js'; sc.defer = true; document.head.appendChild(sc); } catch (e) { return; }
+  window.OneSignalDeferred.push(async function (OneSignal) {
+    try { await OneSignal.init({ appId: String(setting('pushAppId', '')), serviceWorkerPath: 'sw.js', notifyButton: { enable: false }, welcomeNotification: { disable: true } }); App.os = OneSignal; pcPushSync(); } catch (e) { /* the shop works the same without it */ }
+  });
+}
+function pcPushSync() {
+  try {
+    if (!App.os) return; const id = App.user && App.user.id ? String(App.user.id) : '';
+    if (id && App.pushUid !== id) { App.pushUid = id; App.os.login(id); }
+    else if (!id && App.pushUid) { App.pushUid = ''; App.os.logout(); }
+  } catch (e) { /* ignore */ }
+}
+function pcPushBanner() {
+  if (!App.user) return '';
+  if (/^true$/i.test(String(setting('pushOn', 'FALSE'))) && pcIsIos() && !pcInstalled()) return '<div class="alert">To get notifications on your iPhone, first add the shop to your Home Screen (tap Share, then Add to Home Screen), then open the shop from there.</div>';
+  if (!pcPushOn() || !('Notification' in window) || Notification.permission !== 'default') return '';
+  return '<section class="card pushcard"><b>Get notifications on your phone</b><p class="meta">We tell you when we reply, confirm your payment or send your order, even when the shop is closed.</p><button type="button" class="btn btn-tape btn-sm" data-act="pcpush">Turn on notifications</button></section>';
+}
+App.actions.pcpush = async function (el) {
+  try {
+    if (!App.os) { pcPushInit(); toast('Notifications are getting ready. Please tap again in a few seconds.'); return; }
+    await App.os.Notifications.requestPermission();
+    if (Notification.permission === 'granted') { try { await App.os.User.PushSubscription.optIn(); } catch (e) { /* ignore */ } App.pushUid = ''; pcPushSync(); toast('Notifications are on.', 'ok'); }
+    else if (Notification.permission === 'denied') toast('Notifications were blocked. You can allow them in your phone settings for this website.');
+    const c = el && el.closest ? el.closest('.pushcard') : null; if (c && Notification.permission !== 'default') c.remove();
+  } catch (e) { toast('We could not turn notifications on.'); }
+};
 /* ---------- "Get the app" page: a link you can send to anyone (https://your-shop/#/app) ---------- */
 App.routes.app = function () {
   setTitle('Get the app');
