@@ -2,6 +2,7 @@
    so the shop ON/OFF switch, sale prices and stock always show what is current.
    It keeps only the shop page and the logo pictures on the phone, so the app opens at once and shows the loading line
    even on slow or no internet. A new version of the shop page appears the next time the app is opened. */
+try { importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js'); } catch (e) { /* offline: phone notifications wake up again when the internet is back */ }
 const CACHE = 'pc-shell-v2';
 self.addEventListener('install', e => { self.skipWaiting(); });
 self.addEventListener('activate', e => {
