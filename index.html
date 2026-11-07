@@ -2256,13 +2256,13 @@ const MAP = { m: null, marker: null, lat: null, lng: null, seq: 0, hits: [] };
 const LEAF_JS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', LEAF_CSS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
 
 /* map layers: Satellite first (default), then Map; a Labels tick; full screen. The choice is remembered on this phone. */
-const SAT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', LBL_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', NAMES_URL = 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png';
+const SAT_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', LBL_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
 function addMapLayers(m, el) {
   const L = window.L; let kind = 'sat', labels = true;
   try { kind = localStorage.getItem('gbs_maptype') === 'map' ? 'map' : 'sat'; labels = localStorage.getItem('gbs_maplabels') !== '0'; } catch (e) { /* private mode */ }
   const sat = L.tileLayer(SAT_URL, { maxZoom: 21, maxNativeZoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }),
     // names: countries, seas and towns when zoomed out; streets, estates, shops and landmarks (from OpenStreetMap) once zoomed in, all the way to the maximum zoom
-    lbl = L.layerGroup([L.tileLayer(LBL_URL, { maxZoom: 11, maxNativeZoom: 11, attribution: '' }), L.tileLayer(NAMES_URL, { minZoom: 12, maxZoom: 21, maxNativeZoom: 20, subdomains: 'abcd', attribution: '© OpenStreetMap contributors © CARTO' })]),
+    lbl = L.tileLayer(LBL_URL, { maxZoom: 21, maxNativeZoom: 17, attribution: '' }),   // Esri names, free and with no key: countries, towns, roads and places; beyond zoom 17 the same names are simply enlarged
     osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
   const ctl = L.control({ position: 'topright' });
   ctl.onAdd = function () {
@@ -2564,6 +2564,7 @@ async function placeOrder(ev) {
     }
     App.cart = {}; saveCart(); App.draft = null; App.updateTools();
     location.replace('#/order/' + encodeURIComponent(o.id));
+    setTimeout(function () { pcPushAsk('order'); }, 2500);
   } catch (e) {
     if (e.code === 'AUTH') return handleErr(e, 'checkout');
     if (e.code === 'STOCK') quietRefreshCatalog();
@@ -3702,7 +3703,7 @@ function pcPushInit() {
 function pcPushSync() {
   try {
     if (!App.os) return; const id = App.user && App.user.id ? String(App.user.id) : '';
-    if (id && App.pushUid !== id) { App.pushUid = id; App.os.login(id); }
+    if (id && App.pushUid !== id) { App.pushUid = id; App.os.login(id); setTimeout(function () { pcPushAsk('login'); }, 4000); }
     else if (!id && App.pushUid) { App.pushUid = ''; App.os.logout(); }
   } catch (e) { /* ignore */ }
 }
@@ -3712,6 +3713,24 @@ function pcPushBanner() {
   if (!pcPushOn() || !('Notification' in window) || Notification.permission !== 'default') return '';
   return '<section class="card pushcard"><b>Get notifications on your phone</b><p class="meta">We tell you when we reply, confirm your payment or send your order, even when the shop is closed.</p><button type="button" class="btn btn-tape btn-sm" data-act="pcpush">Turn on notifications</button></section>';
 }
+// Politely asks once for permission to send notifications: right after signing in, and right after an order is placed.
+// "Not now" is remembered (3 days after signing in, 1 day after an order) so nobody is nagged. Chrome's own Allow button still has the last word.
+function pcPushAsk(why) {
+  try {
+    if (!App.user || !pcPushOn() || !('Notification' in window) || Notification.permission !== 'default') return;
+    if (typeof pcIsIos === 'function' && pcIsIos() && typeof pcInstalled === 'function' && !pcInstalled()) return;
+    if ($('#modal')) return;
+    const last = store('gbs_pushask'), gap = (why === 'order' ? 1 : 3) * 86400000;
+    if (last && Date.now() - last.t < gap) return;
+    if (why !== 'order' && App.pushAsked) return; App.pushAsked = true;
+    openModal('Get order updates on your phone?',
+      '<p>We will tell you when we confirm your payment, send your order, or reply to you, even when the shop is closed.</p>' +
+      '<p class="meta">Your phone will ask you to tap <b>Allow</b>. You can turn it off any time.</p>' +
+      '<p style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button type="button" class="btn btn-tape" data-act="pcpushyes">Yes, tell me</button><button type="button" class="btn btn-ghost" data-act="pcpushlater">Not now</button></p>');
+  } catch (e) { /* the shop works the same without it */ }
+}
+App.actions.pcpushyes = function (el) { closeModal(); store('gbs_pushask', { t: Date.now() }); return App.actions.pcpush(el); };
+App.actions.pcpushlater = function () { store('gbs_pushask', { t: Date.now() }); closeModal(); };
 App.actions.pcpush = async function (el) {
   try {
     if (!App.os) { pcPushInit(); toast('Notifications are getting ready. Please tap again in a few seconds.'); return; }
