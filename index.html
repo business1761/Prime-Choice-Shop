@@ -1294,6 +1294,7 @@ function parseHash() {
 }
 function clearTimers() { App.timers.forEach(clearInterval); App.timers = []; }
 function onRoute(keepScroll) {
+  document.body.classList.remove('map-lock'); document.body.style.overflow = '';   // a full-screen map must never leave the page locked after the customer goes back
   const r = parseHash(); App.route = r;
   if (!App.cfg) return;
   if (shopClosed()) { clearTimers(); closedScreen(); return; }
@@ -3673,7 +3674,7 @@ async function pcLive() {
   } catch (e) { /* try again later */ }
   finally { pcLiveBusy = false; pcLiveAt = Date.now(); }
 }
-document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') pcWatch(true); });
+document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { pcWatch(true); if (!document.querySelector('.map-full') && !document.getElementById('modal')) { document.body.classList.remove('map-lock'); document.body.style.overflow = ''; } } });
 /* very small check every 6 seconds (every minute if the customer is idle): if the owner saved anything, fetch it at once */
 let pcVer = null, pcWatchBusy = false, pcTouchAt = Date.now(), pcWatchAt = 0;
 ['pointerdown', 'touchend', 'keydown', 'scroll'].forEach(function (ev) { document.addEventListener(ev, function () { pcTouchAt = Date.now(); }, { passive: true }); });
